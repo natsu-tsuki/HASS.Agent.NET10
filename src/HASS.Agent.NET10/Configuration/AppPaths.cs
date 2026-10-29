@@ -29,13 +29,23 @@ internal sealed record AppPaths(
         var settingsFile = Path.Combine(configDirectory, "settings.json");
         var legacyProgramDataSettingsFile = Path.Combine(legacyProgramDataDirectory, "settings.json");
         var legacySettingsFile = Path.Combine(legacyConfigDirectory, "settings.json");
-        if (!File.Exists(settingsFile) && File.Exists(legacyProgramDataSettingsFile))
+        try
         {
-            File.Copy(legacyProgramDataSettingsFile, settingsFile);
+            if (!File.Exists(settingsFile) && File.Exists(legacyProgramDataSettingsFile))
+            {
+                File.Copy(legacyProgramDataSettingsFile, settingsFile);
+            }
+            else if (!File.Exists(settingsFile) && File.Exists(legacySettingsFile))
+            {
+                File.Copy(legacySettingsFile, settingsFile);
+            }
         }
-        else if (!File.Exists(settingsFile) && File.Exists(legacySettingsFile))
+        catch (UnauthorizedAccessException) when (KioskMode.AppliesToCurrentUser())
         {
-            File.Copy(legacySettingsFile, settingsFile);
+            // A kiosk user may only read the settings folder: their app starts without the
+            // settings and cannot write any in their place, so the migration waits for whoever
+            // may write there. For anyone else a failed copy still stops the start, as before,
+            // and is tried again next time instead of being replaced by defaults.
         }
 
         return new AppPaths(

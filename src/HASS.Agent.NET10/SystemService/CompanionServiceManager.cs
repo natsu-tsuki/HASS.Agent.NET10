@@ -25,14 +25,18 @@ internal static class CompanionServiceManager
         }
 
         var command = args[0].Trim().ToLowerInvariant();
-        if (command is not ("--install-service" or "--uninstall-service" or "--start-service" or "--stop-service" or "--approve-service-commands" or "--settings-access"))
+        if (command is not ("--install-service" or "--uninstall-service" or "--start-service" or "--stop-service" or "--approve-service-commands" or "--settings-access" or "--kiosk"))
         {
             return false;
         }
 
-        var result = command == "--settings-access"
-            ? ChangeSettingsAccess(args.Skip(1).Where(arg => !string.Equals(arg, "--quiet", StringComparison.OrdinalIgnoreCase)).ToList())
-            : ExecuteControlCommand(command, args);
+        var arguments = args.Skip(1).Where(arg => !string.Equals(arg, "--quiet", StringComparison.OrdinalIgnoreCase)).ToList();
+        var result = command switch
+        {
+            "--settings-access" => ChangeSettingsAccess(arguments),
+            "--kiosk" => ChangeKioskMode(arguments),
+            _ => ExecuteControlCommand(command, args),
+        };
         // For whoever started this (the installer, a script): 1 when it did not do what was asked.
         Environment.ExitCode = result.Success ? 0 : 1;
         if (!args.Any(arg => string.Equals(arg, "--quiet", StringComparison.OrdinalIgnoreCase)))
@@ -191,7 +195,7 @@ internal static class CompanionServiceManager
                 policy = current.KeepOnly(settings);
             }
 
-            if (!ServicePolicyFolderIsProtected(Path.GetDirectoryName(ServicePolicy.DefaultPath)!))
+            if (!ProgramFolderIsProtected(Path.GetDirectoryName(ServicePolicy.DefaultPath)!))
             {
                 log.Warning($"The service policy is written next to {Environment.ProcessPath}, a folder users can write to; it protects nothing there.");
             }
@@ -223,6 +227,7 @@ internal static class CompanionServiceManager
         var users = arguments.Skip(1).Where(user => !string.IsNullOrWhiteSpace(user)).ToList();
         var paths = AppPaths.Create();
         using var log = new FileLog(paths.LogFile);
+        PrepareLastRunRecord(log);
         try
         {
             switch (mode)
@@ -255,6 +260,99 @@ internal static class CompanionServiceManager
         }
     }
 
+    /// <summary>
+    /// "--kiosk on USER [USER ...]": kiosk mode for these users, the members of the "HASS.Agent
+    /// Kiosk" group from then on (KioskMode); "--kiosk off": the full app for every user again,
+    /// and the group goes. Needs an administrator.
+    /// </summary>
+    private static ControlCommandResult ChangeKioskMode(IReadOnlyList<string> arguments)
+    {
+        if (!IsAdministrator())
+        {
+            return new ControlCommandResult(false, S("Kiosk.NeedsAdmin"));
+        }
+
+        var mode = arguments.FirstOrDefault()?.ToLowerInvariant();
+        var users = arguments.Skip(1).Where(user => !string.IsNullOrWhiteSpace(user)).ToList();
+        var paths = AppPaths.Create();
+        using var log = new FileLog(paths.LogFile);
+        var by = $"{Environment.UserDomainName}\\{Environment.UserName}";
+        try
+        {
+            switch (mode)
+            {
+                case "on" when users.Count > 0:
+                {
+                    // Every name given must be someone, and no administrator; nothing changes otherwise.
+                    // The members come last: until the folder rule and the task are in place,
+                    // nobody new is a kiosk user.
+                    var (group, kioskUsers) = SettingsAccess.PrepareKioskGroup(users);
+                    SettingsAccess.ApplyKiosk(paths.ConfigDirectory, group);
+                    PrepareLastRunRecord(log);
+                    try
+                    {
+                        KioskEvents.Register();
+                    }
+                    catch (Exception ex)
+                    {
+                        // Kiosk mode works without it; only its entries in the event log, and the
+                        // start at once after a close, wait for it.
+                        log.Warning($"Unable to register the event log source: {ex.Message}");
+                    }
+
+                    if (!KioskWatchdog.Register(Environment.ProcessPath ?? Application.ExecutablePath, group, log))
+                    {
+                        return new ControlCommandResult(false, S("Kiosk.TaskFailed"));
+                    }
+
+                    SettingsAccess.SetKioskMembers(kioskUsers);
+                    var names = string.Join(", ", users);
+                    log.Info($"Kiosk mode on for {names}.");
+                    KioskEvents.Write(KioskEvents.TurnedOn, $"Kiosk mode turned on by {by} for: {names}. Each of them gets it at their next logon.", log);
+                    return new ControlCommandResult(true, string.Format(S("Kiosk.On"), names));
+                }
+                case "off":
+                    if (KioskMode.GroupSid() is null)
+                    {
+                        // Not on (the uninstaller asks either way): the folder keeps its rule,
+                        // and a task left behind goes.
+                        KioskWatchdog.Remove(log);
+                        return new ControlCommandResult(true, S("Kiosk.Off"));
+                    }
+
+                    // The group goes after the rule, and the task after both: an off that failed
+                    // half way leaves kiosk mode working, and is tried again in full.
+                    SettingsAccess.ApplyKiosk(paths.ConfigDirectory, kioskGroup: null);
+                    SettingsAccess.RemoveKioskGroup();
+                    KioskWatchdog.Remove(log);
+                    log.Info("Kiosk mode off.");
+                    KioskEvents.Write(KioskEvents.TurnedOff, $"Kiosk mode turned off by {by}.", log);
+                    return new ControlCommandResult(true, S("Kiosk.Off"));
+                default:
+                    return new ControlCommandResult(false, S("Kiosk.Usage"));
+            }
+        }
+        catch (Exception ex)
+        {
+            log.Warning($"Changing kiosk mode failed: {ex.Message}");
+            return new ControlCommandResult(false, string.Format(S("Kiosk.Failed"), ex.Message));
+        }
+    }
+
+    // The PC's record of the version that last ran (LastRunRecord). Every install runs
+    // --settings-access as administrator, so the record is there from the first start on.
+    private static void PrepareLastRunRecord(FileLog log)
+    {
+        try
+        {
+            LastRunRecord.Prepare();
+        }
+        catch (Exception ex)
+        {
+            log.Warning($"Unable to prepare the record of the version that last ran: {ex.Message}");
+        }
+    }
+
     // A choice made at install time or in the app: the app does not ask about it again.
     private static void RememberAccessDecision(AppPaths paths, FileLog log)
     {
@@ -279,7 +377,7 @@ internal static class CompanionServiceManager
     }
 
     /// <summary>Whether ordinary users are kept from writing to the folder (Program Files is).</summary>
-    private static bool ServicePolicyFolderIsProtected(string folder)
+    private static bool ProgramFolderIsProtected(string folder)
     {
         try
         {

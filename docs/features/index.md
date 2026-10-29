@@ -19,6 +19,7 @@ description: Everything HASS.Agent .NET10 does for a Windows PC in Home Assistan
 | **Windows service** | The same program as a system service, for what should work with nobody logged in. | [Windows service](windows-service.md) |
 | **Updates from Home Assistant** | An update entity with a working Install button; silent when the service is installed; only installers signed by the publisher are run. | [Updates](updates.md) |
 | **Who may use it** | The settings, with the Home Assistant token and the commands, for every user of the PC or only for the ones you tick. | [Who may use it on this PC](users.md) |
+| **Kiosk mode** | The tray app runs for the users of a kiosk PC, who cannot open, change or close it; it comes back when it is closed. | [Kiosk mode](kiosk.md) |
 | **Danger Zone** | Opt-in toolbox: MQTT cleanup, live monitor, debug log, backup and restore, factory reset, fast sensors, beta updates. | [Danger Zone](danger-zone.md) |
 | **Connection** | MQTT, the Home Assistant WebSocket API, or both with automatic failover; a notification-only local HTTP API as a fallback. | [Connection modes](../connection/index.md) |
 
@@ -26,7 +27,7 @@ description: Everything HASS.Agent .NET10 does for a Windows PC in Home Assistan
 
 A click on the tray icon opens the settings window; the tray menu also has the dashboard popup, the service's status and controls, the local API's address while that is on, and **Exit**. The pages, in the order of the sidebar:
 
-- **General**: the device name Home Assistant shows, the local HTTP API (off by default) with its address, port and API key, the UI language and the language of the entity names in Home Assistant (English, Hungarian or Simplified Chinese), start on login, the notification at startup, the settings and log folder, and the **Danger Zone** switch.
+- **General**: the device name Home Assistant shows, the local HTTP API (off by default) with its address, port and API key, the UI language and the language of the entity names in Home Assistant (English, Hungarian, German or Simplified Chinese), start on login, the notification at startup, the settings and log folder, and the **Danger Zone** switch.
 - **MQTT** and **HA API**: the two connections, each with a connection test. [Connection modes](../connection/index.md)
 - **Capabilities**: which role, the tray app or the service, handles each feature and each system command; the notification style and the custom name; the dashboard popup; the custom commands; the hotkeys; the polling intervals. [Windows service](windows-service.md)
 - **Media player**: the media player entity, the cover art, the announcements. [Media player](media-player.md)
