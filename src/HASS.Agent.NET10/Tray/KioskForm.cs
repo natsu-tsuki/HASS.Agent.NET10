@@ -10,14 +10,16 @@ namespace HASS.Agent.Companion.Tray;
 /// <summary>
 /// Kiosk mode, from the Danger Zone: who the kiosk users are (KioskMode). Turning it on,
 /// changing the list and turning it off run the app as administrator (UAC) with --kiosk. An
-/// administrator cannot be ticked, and neither can whoever opened this.
+/// administrator cannot be ticked, and whoever opened this cannot change their own tick; a
+/// note under the list says so.
 /// </summary>
 internal sealed class KioskForm : Form
 {
     private readonly FileLog _log;
     private readonly CheckedListBox _users = new() { CheckOnClick = true, IntegralHeight = false, BorderStyle = BorderStyle.FixedSingle };
     private readonly List<string> _names = [];
-    private readonly HashSet<int> _neverKiosk = [];
+    // Rows that cannot be changed here, with the state they keep.
+    private readonly Dictionary<int, CheckState> _locked = [];
 
     private KioskForm(FileLog log)
     {
@@ -58,8 +60,10 @@ internal sealed class KioskForm : Form
         };
 
         // The same users as the Users of this PC dialog lists, ticked when they are kiosk
-        // users. An administrator cannot be one, and neither can whoever opened this: ticking
-        // yourself would turn your own app into the kiosk one.
+        // users. An administrator cannot be one, and whoever opened this cannot change their
+        // own: ticking yourself would turn your own app into the kiosk one. A note under the
+        // list says so. Both keep the tick they have: a kiosk user who opens this before their
+        // next logon (the app is the full one until then) stays one when the list is saved.
         var members = on ? SafeSet(SettingsAccess.KioskUsers) : new HashSet<string>();
         var administrators = SafeList(SettingsAccess.AdministratorUsers);
         var current = CurrentUserName;
@@ -75,27 +79,36 @@ internal sealed class KioskForm : Form
         foreach (var user in listed)
         {
             var administrator = administrators.Contains(user, StringComparer.OrdinalIgnoreCase);
-            var never = administrator || string.Equals(user, current, StringComparison.OrdinalIgnoreCase);
+            var you = string.Equals(user, current, StringComparison.OrdinalIgnoreCase);
+            var ticked = !administrator && members.Contains(user);
             var index = _users.Items.Add(
                 administrator ? string.Format(Strings.Get("Kiosk.Administrator"), user) : user,
-                !never && members.Contains(user));
+                ticked);
             _names.Add(user);
-            if (never)
+            if (administrator || you)
             {
-                _neverKiosk.Add(index);
+                _locked[index] = ticked ? CheckState.Checked : CheckState.Unchecked;
             }
         }
 
         _users.ItemCheck += (_, e) =>
         {
-            if (_neverKiosk.Contains(e.Index))
+            if (_locked.TryGetValue(e.Index, out var state))
             {
-                e.NewValue = CheckState.Unchecked;
+                e.NewValue = state;
             }
         };
         _users.Width = width;
         _users.Height = _users.ItemHeight * Math.Clamp(_users.Items.Count, 3, 8) + LogicalToDeviceUnits(6);
-        _users.Margin = new Padding(0, 0, 0, gap);
+        _users.Margin = new Padding(0, 0, 0, LogicalToDeviceUnits(4));
+        var cannotTick = new Label
+        {
+            AutoSize = true,
+            MaximumSize = new Size(width, 0),
+            Margin = new Padding(0, 0, 0, gap),
+            ForeColor = SystemColors.GrayText,
+            Text = string.Format(Strings.Get("Kiosk.CannotTick"), current),
+        };
 
         Button MakeButton(string key, bool elevates)
         {
@@ -152,6 +165,7 @@ internal sealed class KioskForm : Form
         layout.Controls.Add(heading);
         layout.Controls.Add(text);
         layout.Controls.Add(_users);
+        layout.Controls.Add(cannotTick);
         layout.Controls.Add(buttons);
         Controls.Add(layout);
         AcceptButton = turnOn;
